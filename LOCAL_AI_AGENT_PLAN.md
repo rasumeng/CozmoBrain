@@ -13,25 +13,30 @@
 
 ## 1. Model Selection
 
-### Primary: Ornith-1.0-9B (Q4_K_M)
+### Primary: qwen3:8b (Q4_K_M)
 
-- Self-scaffolding RL model built specifically for agentic coding
-- **43.1 Terminal-Bench 2.1, 69.4 SWE-Bench Verified** — crushes Qwen2.5-Coder at coding tasks
-- Fits ~6GB VRAM with full GPU offload, leaves room for 262K context
-- MIT license, no regional restrictions
-- Available on Ollama: `ollama pull ornith:9b`
+- **Current worker model** — switched from ornith:9b due to weak tool calling
+- Fits ~5.2GB VRAM with full GPU offload
+- Native tool calling via Pydantic AI
+- ~50s cold start, ~10s warm on RTX 4060
 
-### Alternatives
+### Router: qwen3:1.7b
 
-- **Qwen2.5-Coder 7B** — Good general-purpose coding, weaker on agentic tasks
-- **Ornith-1.0-35B MoE** — 3B active params/token, fast but needs 24GB card (future upgrade)
+- Used for keyword-based tool routing (no LLM call)
+- Reduces context tokens by filtering to relevant tools per query
+- ~1.2GB VRAM (disabled via `router_llm: false` to save VRAM)
+
+### Alternatives Tested
+
+- **ornith:9b** — Excellent coding benchmarks but unreliable tool calling
+- **qwen2.5-coder:7b** — Good tool calling, weaker reasoning
+- **qwen3:8b** — Best balance of reasoning + tool calling for this setup
 
 ### Runtime
 
 - **Ollama** with llama.cpp backend
-- Enable full GPU offload: `-ngl 99`
-- Quantization: Q4_K_M (balance of speed and quality)
-- Model loading: ~5s cold start
+- Ollama base URL for Pydantic AI: `http://localhost:11434/v1`
+- qwen3 requires `think: false` and chat API (not generate API)
 
 ---
 
@@ -253,72 +258,73 @@ Available tools: [list tools here]
 
 ## 7. Implementation Phases
 
-### Phase 1: Foundation
+### Phase 1: Foundation ✅
 
-- [x] Install Ollama, pull Ornith-1.0-9B Q4_K_M (`ollama pull ornith:9b`)
-- [ ] Verify GPU offload working (`-ngl 99`)
-- [ ] Benchmark token speed (target: 40+ tok/s)
+- [x] Install Ollama, pull qwen3:8b (`ollama pull qwen3:8b`)
+- [x] Pull qwen3:1.7b as router model
+- [x] GPU offload working (Ollama default)
 
-### Phase 2: Core Agent
+### Phase 2: Core Agent ✅
 
-- [x] Set up Python project with dependencies
-- [ ] Implement Pydantic AI agent with Ollama provider
-- [ ] Register native tools (execute_python, fetch_url, write_knowledge)
-- [ ] Create system prompt with tool schema
+- [x] Set up Python project with Pydantic AI
+- [x] Implement Pydantic AI agent with Ollama provider
+- [x] Register native tools (execute_python, fetch_url, write_knowledge, etc.)
+- [x] Dynamic system prompt with tool list + workspace/repo paths
 - [x] Set up OKF knowledge base structure
-- [ ] Implement OKF read/write tools as Pydantic AI tools
 
-### Phase 3: Tools
+### Phase 3: Tools ✅
 
-- [ ] Implement `execute_python` with Docker sandbox
-- [ ] Implement `fetch_url` with trafilatura
-- [ ] Implement `write_file` with path validation
-- [ ] Implement `read_knowledge` with OKF index navigation
-- [ ] Implement `write_knowledge` with auto frontmatter
-- [ ] Connect SearXNG MCP for web search
+- [x] Implement `execute_python` with Docker sandbox + subprocess fallback
+- [x] Implement `fetch_url` with trafilatura
+- [x] Implement `write_file` with path validation
+- [x] Implement `read_knowledge` / `write_knowledge` with OKF frontmatter
+- [x] Connect SearXNG for web search (Docker container on port 8080)
 
-### Phase 4: Integration
+### Phase 4: Integration ✅
 
-- [ ] Connect Filesystem MCP server
-- [ ] Connect Git MCP server
-- [ ] Wire all tools into orchestrator
-- [ ] Implement context window management
+- [x] Connect Filesystem MCP server (14 tools)
+- [x] Connect Git MCP server (12 tools) via `mcp-server-git` Python package
+- [x] Router/orchestrator with keyword matching + domain priority
+- [x] Context window management (sliding window trim)
 
-### Phase 5: Polish
+### Phase 5: Polish ✅ (partial)
 
-- [ ] Add error handling and retry logic
-- [ ] Implement summarization for tool responses
-- [ ] Add logging and debug mode
-- [ ] Test end-to-end workflows
+- [x] Streaming response output with "thinking..." indicator
+- [x] `debounce_by=0` for faster streaming
+- [x] Tool response truncation
+- [x] Graceful error handling in REPL
+- [ ] Logging and debug mode
+- [ ] Summarization for long tool responses
 
 ---
 
 ## 8. Project Structure
 
 ```
-cozmobrain/
+CozmoBrain/
 ├── agent/
 │   ├── __init__.py
-│   ├── main.py              # Entry point, Pydantic AI agent
-│   ├── tools.py             # Tool definitions (Pydantic models)
-│   ├── knowledge.py         # OKF knowledge base tools
+│   ├── main.py              # Entry point, REPL with streaming
+│   ├── llm.py               # Pydantic AI agent factory
+│   ├── tools.py             # Native tools (execute_python, fetch_url, etc.)
+│   ├── mcp_host.py          # MCP server connection manager
+│   ├── router.py            # Tool router (keyword matching + domain priority)
 │   ├── context.py           # Context window management
-│   └── prompts.py           # System prompts
+│   └── prompts.py           # Dynamic system prompts
 ├── docker/
-│   └── sandbox.Dockerfile   # Sandbox container
+│   └── sandbox.Dockerfile   # Python sandbox container
 ├── knowledge/               # OKF knowledge base (Obsidian vault)
 │   ├── index.md
 │   ├── conversations/
-│   │   └── index.md
 │   ├── learnings/
-│   │   └── index.md
 │   ├── projects/
-│   │   └── index.md
 │   └── reference/
-│       └── index.md
 ├── workspace/               # Agent file workspace (code output)
+├── rules.yaml               # Tool routing rules
+├── config.yaml              # Model, tool, server config
 ├── requirements.txt
-└── config.yaml              # Model, tool, server config
+├── searxng_settings.yml     # SearXNG config
+└── LOCAL_AI_AGENT_PLAN.md   # This file
 ```
 
 ---
@@ -351,16 +357,16 @@ rich                # Terminal output
 
 ## 10. Performance Targets
 
-| Metric | Target |
-|--------|--------|
-| Model Load Time | < 5s (Ornith-9B cold start) |
-| Tokens/sec (generation) | 40–60 |
-| Max Tool Calls Before Context Full | 8–12 |
-| Tool Response Truncation | 500 tokens max |
-| Max History Messages | 20 (then summarize/compact) |
-| Docker Sandbox Startup | < 2s |
-| Docker Sandbox Teardown | < 1s |
-| Context Window (Ornith) | 262K tokens |
+| Metric | Target | Current |
+|--------|--------|---------|
+| Model Load Time | < 5s | ~50s cold, ~10s warm |
+| Tokens/sec (generation) | 40–60 | ~15-25 |
+| Max Tool Calls Before Context Full | 8–12 | 20 (sliding window) |
+| Tool Response Truncation | 500 tokens max | 2000 chars |
+| Max History Messages | 20 | 20 |
+| Docker Sandbox Startup | < 2s | ~1s |
+| MCP Servers | 2 | filesystem + git (26 tools total) |
+| Router | keyword + LLM fallback | keyword only (LLM disabled) |
 
 ---
 
@@ -377,11 +383,22 @@ rich                # Terminal output
 
 ## 12. Future Enhancements
 
-- **Micro-agents** — Split into specialized models (coder, researcher, writer) with routing
-- **Voice input/output** — Whisper for STT, Piper for TTS
-- **Image understanding** — Add vision model (e.g., LLaVA) for multimodal
-- **Obsidian sync** — Git sync between knowledge base and Obsidian vault across devices
-- **OKF validation** — Auto-validate knowledge base against OKF v0.1 spec
+- **Desktop App** — Electron/Tauri with split view (chat + artifacts)
+- **Cowork Code** — Live code preview in iframe, local dev server
+- **RAG + Vector DB** — LanceDB for semantic search over knowledge base
+- **Obsidian Sync** — Git sync between knowledge base and Obsidian vault
+- **Streaming** — Already implemented in CLI; needs UI integration
+- **Micro-agents** — Split into specialized models (coder, researcher, writer)
+- **Voice I/O** — Whisper for STT, Piper for TTS
+- **Vision** — Add qwen2.5vl:7b for multimodal
 - **Plugin system** — Dynamic MCP server loading at runtime
-- **Web UI** — Gradio or Streamlit interface
 - **Upgrade to Ornith-35B MoE** — When 24GB card acquired
+
+---
+
+## 13. Known Issues (as of 2026-07-06)
+
+1. **Cold start ~50s** — qwen3:8b (5.2GB) loads slowly on first query. Subsequent queries ~10s.
+2. **Cancel scope errors** — MCP context managers produce harmless noise on shutdown. No fix needed.
+3. **Git MCP path** — Must use full venv Python path in config.yaml (`D:\Projects\CozmoBrain\venv\Scripts\python.exe`), not bare `python`.
+4. **Streaming debouncing** — Set `debounce_by=0` for snappy output; default 100ms feels laggy.

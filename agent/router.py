@@ -105,7 +105,6 @@ class ToolRouter:
 
             # Strip qwen3 thinking tags if present
             if "<think>" in response_text:
-                import re
                 response_text = re.sub(r"<think>.*?</think>", "", response_text, flags=re.DOTALL).strip()
 
             # Parse JSON array from response

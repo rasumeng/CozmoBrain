@@ -41,6 +41,17 @@ def count_message_tokens(messages: list) -> int:
     return total
 
 
+def truncate_tool_responses(messages: list, max_chars: int = 2000) -> list:
+    """Truncate long tool return content in message history to save context."""
+    for msg in messages:
+        for part in getattr(msg, 'parts', []):
+            if getattr(part, 'kind', None) == 'tool-return':
+                content = getattr(part, 'content', '')
+                if isinstance(content, str) and len(content) > max_chars:
+                    part.content = content[:max_chars] + "\n[truncated]"
+    return messages
+
+
 def compact_messages(messages: list, config: dict) -> list:
     """Apply context management: sliding window trim."""
     max_messages = config.get("max_history", 20)

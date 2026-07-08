@@ -38,11 +38,13 @@ def _execute_in_docker(code: str) -> str:
 
     # Build image if not exists
     if not _image_exists(image_name):
-        subprocess.run(
+        build_result = subprocess.run(
             ["docker", "build", "-t", image_name, "-f", str(dockerfile), str(dockerfile.parent)],
             capture_output=True,
             timeout=60,
         )
+        if build_result.returncode != 0:
+            raise RuntimeError(f"Docker build failed:\n{build_result.stderr[:500]}")
 
     # Run code in container
     result = subprocess.run(
@@ -177,7 +179,9 @@ def write_file(path: str, content: str) -> str:
     """
     try:
         target = (WORKSPACE / path).resolve()
-        if not str(target).startswith(str(WORKSPACE)):
+        try:
+            target.relative_to(WORKSPACE)
+        except ValueError:
             return "[error] Path traversal not allowed"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
@@ -194,7 +198,9 @@ def read_knowledge(path: str) -> str:
     """
     try:
         target = (KNOWLEDGE / path).resolve()
-        if not str(target).startswith(str(KNOWLEDGE)):
+        try:
+            target.relative_to(KNOWLEDGE)
+        except ValueError:
             return "[error] Path traversal not allowed"
         if not target.exists():
             return f"[error] File not found: {path}"
@@ -215,7 +221,9 @@ def write_knowledge(path: str, content: str, type: str = "Reference", title: str
     """
     try: 
         target = (KNOWLEDGE / path).resolve()
-        if not str(target).startswith(str(KNOWLEDGE)):
+        try:
+            target.relative_to(KNOWLEDGE)
+        except ValueError:
             return "[error] Path traversal not allowed"
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

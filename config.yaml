@@ -1,9 +1,11 @@
-model: ornith:9b
+model: qwen3:8b
 max_tokens: 2048
 router_model: qwen3:1.7b
-router_llm: true
+router_llm: false
 workspace: ./workspace
 knowledge: ./knowledge
+git_repo: D:/Projects/CozmoBrain
+searxng_url: http://localhost:8080
 
 mcp_servers:
   filesystem:

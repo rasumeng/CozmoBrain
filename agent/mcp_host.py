@@ -1,3 +1,4 @@
+import sys
 import yaml
 from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.stdio import stdio_client
@@ -14,9 +15,16 @@ class MCPHost:
         """Connect to all MCP servers defined in config."""
         server_configs = self.config.get("mcp_servers", {})
         for name, cfg in server_configs.items():
+            ctx = None
+            session = None
             try:
+                command = cfg["command"]
+                # Resolve generic python command to current interpreter
+                if command in ("python", "python3", "python.exe"):
+                    command = sys.executable
+
                 params = StdioServerParameters(
-                    command=cfg["command"],
+                    command=command,
                     args=cfg.get("args", []),
                     env=cfg.get("env"),
                 )
@@ -32,7 +40,33 @@ class MCPHost:
                 self._context_managers.append(ctx)
                 print(f"[mcp] Connected to {name}")
             except Exception as e:
+                if session is not None:
+                    try:
+                        await session.__aexit__(None, None, None)
+                    except Exception:
+                        pass
+                if ctx is not None:
+                    try:
+                        await ctx.__aexit__(None, None, None)
+                    except Exception:
+                        pass
                 print(f"[mcp] Failed to connect to {name}: {e}")
+
+    async def disconnect(self):
+        """Disconnect all MCP sessions and clean up server processes."""
+        for name, session in reversed(self.sessions):
+            try:
+                await session.__aexit__(None, None, None)
+                print(f"[mcp] Disconnected from {name}")
+            except Exception as e:
+                print(f"[mcp] Error disconnecting {name}: {e}")
+        for ctx in reversed(self._context_managers):
+            try:
+                await ctx.__aexit__(None, None, None)
+            except Exception:
+                pass
+        self.sessions.clear()
+        self._context_managers.clear()
 
     async def get_tool_wrappers(self) -> list[callable]:
         """Get all MCP tools as async callable wrappers, prefixed with server name."""

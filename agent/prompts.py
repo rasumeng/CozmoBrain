@@ -1,4 +1,4 @@
-BASE_PROMPT = """You are CozmoBrain, a local AI assistant running on an RTX 4060 with Ornith-1.0-9B.
+BASE_PROMPT = """You are CozmoBrain, a local AI assistant running on an RTX 4060 with qwen3:8b.
 
 ## Rules
 
@@ -9,16 +9,23 @@ BASE_PROMPT = """You are CozmoBrain, a local AI assistant running on an RTX 4060
 """
 
 
-def build_system_prompt(tools: list) -> str:
+def build_system_prompt(tools: list, workspace: str = "", git_repo: str = "") -> str:
     """Build a system prompt that lists only the tools currently available."""
     tool_names = [t.__name__ for t in tools]
     tool_list = ", ".join(tool_names)
+
+    context = ""
+    if workspace:
+        context += f"\n- Workspace: {workspace}"
+    if git_repo:
+        context += f"\n- Git repository: {git_repo}"
 
     return f"""{BASE_PROMPT}
 
 ## Available Tools
 
 You have these tools: {tool_list}
+{context}
 
 Use them when needed. Do NOT call tools that aren't listed above.
 """
