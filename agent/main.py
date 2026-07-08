@@ -89,7 +89,7 @@ async def main():
                     user_input,
                     message_history=message_history,
                 ) as result:
-                    console.print("[bold green]CozmoBrain:[/] [dim italic]thinking...[/]", end="", flush=True)
+                    console.print("[bold green]CozmoBrain:[/] [dim italic]thinking...[/]", end="")
                     first = True
                     async for chunk in result.stream_text(delta=True, debounce_by=0):
                         if first:

@@ -158,7 +158,8 @@ def web_search(query: str, max_results: int = 5) -> str:
         if not results:
             return "[no results found]"
 
-        lines = []
+        search_date = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        lines = [f"Search performed: {search_date}"]
         for i, r in enumerate(results, 1):
             title = r.get("title", "No title")
             snippet = r.get("content", "")

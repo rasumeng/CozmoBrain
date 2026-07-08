@@ -1,3 +1,6 @@
+from datetime import datetime
+
+
 BASE_PROMPT = """You are CozmoBrain, a local AI assistant running on an RTX 4060 with qwen3:8b.
 
 ## Rules
@@ -20,12 +23,20 @@ def build_system_prompt(tools: list, workspace: str = "", git_repo: str = "") ->
     if git_repo:
         context += f"\n- Git repository: {git_repo}"
 
+    today = datetime.now().strftime("%Y-%m-%d")
     return f"""{BASE_PROMPT}
 
 ## Available Tools
 
 You have these tools: {tool_list}
 {context}
+
+## Today's Date
+
+Today is {today}. When answering time-sensitive questions (news, updates, events, releases), always:
+- Cite the specific date of information you find
+- Note if sources are potentially outdated
+- Prefer recent search results over stale knowledge
 
 Use them when needed. Do NOT call tools that aren't listed above.
 """
