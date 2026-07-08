@@ -1,0 +1,24 @@
+model: ornith:9b
+max_tokens: 2048
+router_model: qwen3:1.7b
+router_llm: true
+workspace: ./workspace
+knowledge: ./knowledge
+
+mcp_servers:
+  filesystem:
+    command: npx
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-filesystem"
+      - "./workspace"
+  git:
+    command: python
+    args:
+      - "-m"
+      - "mcp_server_git"
+      - "--repository"
+      - "D:/Projects/CozmoBrain"
+
+max_history: 20
+tool_response_max_chars: 2000
