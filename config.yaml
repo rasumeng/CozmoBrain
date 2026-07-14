@@ -1,8 +1,11 @@
 model: qwen3:8b
 max_tokens: 2048
-router_model: qwen3:1.7b
-router_llm: false
 workspace: ./workspace
+
+orchestrator:
+  model: openbmb/minicpm5:fp16
+  ollama_url: http://localhost:11434
+  temperature: 0
 knowledge: ./knowledge
 git_repo: D:/Projects/CozmoBrain
 searxng_url: http://localhost:8080
@@ -21,6 +24,31 @@ mcp_servers:
       - "mcp_server_git"
       - "--repository"
       - "D:/Projects/CozmoBrain"
+
+memory:
+  path: ./memory_store
+  embedding_model: all-MiniLM-L6-v2
+  embed_dim: 384
+  auto_summarize: true
+  max_auto_inject: 2
+
+integrations:
+  weather:
+    provider: wttr.in
+    api_key: ""
+  news:
+    provider: rss
+    api_key: ""
+  calendar:
+    ics_path: ./calendar/events.ics
+
+voice:
+  enabled: true
+  model: tiny
+  hotkey: v
+
+tray:
+  enabled: true
 
 max_history: 20
 tool_response_max_chars: 2000

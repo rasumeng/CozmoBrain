@@ -5,8 +5,14 @@ from pydantic_ai.providers.ollama import OllamaProvider
 from .prompts import build_system_prompt
 
 
-def create_agent(model: str = "qwen3:8b", tools: list | None = None, max_tokens: int = 2048,
-                  workspace: str = "", git_repo: str = "") -> Agent:
+def create_agent(
+    model: str = "qwen3:8b",
+    tools: list | None = None,
+    max_tokens: int = 2048,
+    workspace: str = "",
+    git_repo: str = "",
+    extra_context: str | None = None,
+) -> Agent:
     """Create a Pydantic AI agent with Ollama backend.
 
     Args:
@@ -15,12 +21,13 @@ def create_agent(model: str = "qwen3:8b", tools: list | None = None, max_tokens:
         max_tokens: Max tokens for model response.
         workspace: Workspace directory path.
         git_repo: Git repository path.
+        extra_context: Optional pre-computed context (plan results, etc.).
     """
     provider = OllamaProvider(base_url="http://localhost:11434/v1")
     ollama_model = OllamaModel(model_name=model, provider=provider)
     return Agent(
         ollama_model,
-        system_prompt=build_system_prompt(tools or [], workspace, git_repo),
+        system_prompt=build_system_prompt(tools or [], workspace, git_repo, extra_context),
         tools=tools or [],
         model_settings={"max_tokens": max_tokens},
     )

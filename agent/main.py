@@ -1,3 +1,9 @@
+import os
+import warnings
+
+# Suppress HuggingFace Hub unauthenticated request warning
+warnings.filterwarnings("ignore", message="You are sending unauthenticated requests")
+
 import asyncio
 import sys
 import yaml
@@ -8,7 +14,9 @@ from .llm import create_agent
 from .tools import execute_python, fetch_url, write_file, read_knowledge, write_knowledge, web_search
 from .mcp_host import MCPHost
 from .context import compact_messages, count_message_tokens, truncate_tool_responses
-from .router import ToolRouter
+from .orchestrator import AgentOrchestrator
+from .memory import MemoryEmbedder, LanceMemoryStore, MemoryRetriever, MemoryPipeline
+from .integrations import get_integration_tools
 
 
 console = Console()
@@ -21,7 +29,7 @@ def load_config() -> dict:
 
 
 async def main():
-    """Entry point — async to support MCP tools."""
+    """Entry point — async to support MCP tools and orchestrator."""
     config = load_config()
 
     # Configure native tool settings from config
@@ -37,17 +45,82 @@ async def main():
         await mcp.connect()
         mcp_tools = await mcp.get_tool_wrappers()
     except Exception:
-        pass  # connect failure already logged; agent runs with native tools only
+        pass
 
-    # All tools: native (sync) + MCP (async) — Pydantic AI handles both
-    all_tools = native_tools + mcp_tools
+    # Integration tools (system, weather, news, reminders, calendar)
+    integration_tools = get_integration_tools(config)
 
-    # Initialize router
-    router = ToolRouter(
-        "rules.yaml",
-        use_llm=config.get("router_llm", True),
-        llm_model=config.get("router_model", "qwen2.5:1.5b"),
+    # All tools: native + integrations + MCP
+    all_tools = native_tools + integration_tools + mcp_tools
+
+    # Initialize memory system
+    mem_config = config.get("memory", {})
+    embedder = MemoryEmbedder(mem_config.get("embedding_model", "all-MiniLM-L6-v2"))
+    console.print("[dim]Loading memory model...[/]")
+    _ = embedder.dim  # Pre-load embedding model at startup
+    mem_store = LanceMemoryStore(
+        db_path=mem_config.get("path", "./memory_store"),
+        embed_dim=mem_config.get("embed_dim", 384),
     )
+    mem_retriever = MemoryRetriever(
+        mem_store, embedder,
+        max_auto_inject=mem_config.get("max_auto_inject", 2),
+    )
+    mem_pipeline = MemoryPipeline(
+        mem_store, embedder,
+        auto_knowledge=mem_config.get("auto_summarize", True),
+    )
+
+    # Initialize orchestrator with memory
+    orchestrator = AgentOrchestrator(config, all_tools, memory_retriever=mem_retriever)
+
+    # Initialize voice (STT + TTS) if enabled
+    voice_listener = None
+    tts = None
+    voice_config = config.get("voice", {})
+    if voice_config.get("enabled", False):
+        from .voice import VoiceListener, TTS
+        try:
+            voice_listener = VoiceListener(
+                stt_model=voice_config.get("model", "tiny"),
+                hotkey_name=voice_config.get("hotkey", "scroll_lock"),
+            )
+            voice_listener.start()
+            voice_name = voice_config.get("voice") or "en-US-JennyNeural"
+            tts = TTS(voice=voice_name)
+            hotkey_display = voice_config.get("hotkey", "scroll_lock")
+            console.print(f"[dim]Voice: [/]push-to-talk on {hotkey_display}")
+        except Exception as e:
+            console.print(f"[dim]Voice init failed: {e}[/]")
+
+    # Initialize tray + scheduler
+    tray_app = None
+    scheduler = None
+    tray_config = config.get("tray", {})
+    if tray_config.get("enabled", False):
+        from .tray import TrayApp, Scheduler
+        from .tray.notify import notify as tray_notify
+        from .integrations.reminders import check_due_reminders as _check_reminders
+        try:
+            scheduler = Scheduler()
+
+            def _reminder_check():
+                try:
+                    due = _check_reminders()
+                    if due:
+                        tray_notify("CozmoBrain Reminder", due)
+                except Exception:
+                    pass
+
+            scheduler.add_task(60, _reminder_check)
+            scheduler.start()
+
+            tray_app = TrayApp()
+            tray_app.on_quit(lambda: None)  # Let main loop handle cleanup
+            tray_app.start()
+            console.print("[dim]Tray: [/]background notifications active")
+        except Exception as e:
+            console.print(f"[dim]Tray init failed: {e}[/]")
 
     console.print("[bold green]CozmoBrain[/] initialized. Type 'quit' to exit.\n")
 
@@ -56,7 +129,12 @@ async def main():
     try:
         while True:
             try:
-                user_input = console.input("[bold cyan]You:[/] ").strip()
+                # Check for voice input before REPL prompt
+                if voice_listener and voice_listener.has_pending():
+                    user_input = voice_listener.get_pending()
+                    console.print(f"\n[bold cyan]You (voice):[/] {user_input}")
+                else:
+                    user_input = console.input("[bold cyan]You:[/] ").strip()
             except (EOFError, KeyboardInterrupt):
                 console.print("\nGoodbye!")
                 break
@@ -69,16 +147,33 @@ async def main():
                 continue
 
             try:
-                # Route: select relevant tools for this query
-                active_tools = router.get_tools(user_input, all_tools)
+                # Run orchestrator: memory retrieval + optional planning
+                orc_result = await orchestrator.process(user_input, message_history)
 
-                # Create agent with filtered tools
+                # Combine plan context + memories into one extra_context string
+                extra_parts = []
+                if orc_result.plan_context:
+                    extra_parts.append(orc_result.plan_context)
+                if orc_result.memories_context:
+                    extra_parts.append(orc_result.memories_context)
+                extra_context = "\n\n".join(extra_parts) if extra_parts else None
+
+                # Show status messages from orchestrator
+                for msg in orc_result.status_messages:
+                    console.print(f"[dim]{msg}[/]")
+
+                # Use MiniCPM-selected tools + reformulated query
+                active_tools = orc_result.selected_tools or all_tools
+                agent_input = orc_result.reformulated_query or user_input
+
+                # Create agent with filtered tools and context
                 agent = create_agent(
                     config.get("model", "qwen3:8b"),
                     tools=active_tools,
                     max_tokens=config.get("max_tokens", 2048),
                     workspace=config.get("workspace", ""),
                     git_repo=config.get("git_repo", ""),
+                    extra_context=extra_context,
                 )
 
                 # Compact context before each call
@@ -86,7 +181,7 @@ async def main():
                     message_history = compact_messages(message_history, config)
 
                 async with agent.run_stream(
-                    user_input,
+                    agent_input,
                     message_history=message_history,
                 ) as result:
                     console.print("[bold green]CozmoBrain:[/] [dim italic]thinking...[/]", end="")
@@ -109,6 +204,27 @@ async def main():
                         config.get("tool_response_max_chars", 2000),
                     )
                     message_history = all_msgs
+
+                # Fire memory pipeline in background (don't block next input)
+                response_text = ""
+                for msg in reversed(all_msgs):
+                    for part in getattr(msg, 'parts', []):
+                        if getattr(part, 'kind', None) == 'text':
+                            response_text = getattr(part, 'content', '') or ''
+                            break
+                    if response_text:
+                        break
+
+                if response_text:
+                    asyncio.create_task(mem_pipeline.after_turn(
+                        user_input,
+                        response_text,
+                        extra_ctx={"had_plan": orc_result.plan_steps > 0},
+                    ))
+
+                # Speak response via TTS if enabled
+                if tts and response_text:
+                    asyncio.create_task(tts.speak_and_wait(response_text))
             except Exception as e:
                 console.print(f"[red]Error:[/] {e}\n")
     finally:
