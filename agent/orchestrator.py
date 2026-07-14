@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from .planner import Plan, PlanStep, PlanExecutor
 from .reflector import Reflector
 from .orchestrator_model import OrchestratorModel, OrchestratorOutput
+from .state import AgentState, StateStore, AgentStatus
 
 
 @dataclass
@@ -31,7 +32,17 @@ class AgentOrchestrator:
         self.config = config
         self.all_tools = all_tools
         self.memory_retriever = memory_retriever
+        self.state_store = StateStore(
+            config.get(
+                "agent_state_path",
+                "./agent_state.json"
+            )
+        )
+
+        self.state = self.state_store.load()
         self.reflector = Reflector()
+        self.state_store = StateStore()
+        self.state = self.state_store.load()
 
         orc_config = config.get("orchestrator", {})
         self.orch_model = OrchestratorModel(
@@ -102,6 +113,9 @@ class AgentOrchestrator:
         """
         result = OrchestratorResult()
 
+        self.state.set_goal(user_input)
+        self.state.status = AgentStatus.THINKING
+
         # Step 1: memories
         if self.memory_retriever is not None:
             try:
@@ -119,6 +133,17 @@ class AgentOrchestrator:
         orc_output = await self.orch_model.analyze(
             user_input,
             memories_context=result.memories_context,
+            state_context=self.state.summary(),
+            planned=orc_output.plan is not None,
+        )
+
+        self.state.add_event(
+            "planning",
+            "Orchestrator generated plan",
+            {
+                "tools": orc_output.tools,
+                "query": orc_output.query,
+            }
         )
 
         result.selected_tools = self._resolve_tools(orc_output.tools)
@@ -131,8 +156,13 @@ class AgentOrchestrator:
             result.status_messages.append(f"Executing {len(plan.steps)}-step plan...")
             result.plan_steps = len(plan.steps)
 
+
+            self.state.status = AgentStatus.EXECUTING
+            self.state.active_plan = { "goal": plan.goal, "steps": len(plan.steps),}
+            
             executor = PlanExecutor(result.selected_tools, self.reflector)
             plan = await executor.execute_plan(plan)
+            self.state.record_execution(plan)
 
             failed = [s for s in plan.steps if s.status.value == "failed"]
             result.plan_failures = len(failed)
@@ -146,5 +176,24 @@ class AgentOrchestrator:
                 result.status_messages.append("Plan executed successfully.")
 
             result.plan_context = self._build_plan_context(plan)
+
+            for step in plan.steps:
+
+                if step.result:
+                    self.state.add_observation(
+                        source=step.tool,
+                        content=str(step.result)[:500]
+                    )
+
+                self.state.record_tool(
+                    step.tool
+                )
+
+
+            self.state.status = AgentStatus.REFLECTING
+
+            self.state_store.save(
+                self.state
+            )
 
         return result

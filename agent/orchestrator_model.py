@@ -25,7 +25,9 @@ Rules:
   Each plan step has: {{"tool": "tool_name", "args": {{...}}}}
   Steps run in order. Results flow step-to-step via context.
 - If one step suffices, set plan to null.
-- Use memory context if provided, but reformulate the query to be self-contained.
+- Use memory context and agent state if provided.
+- Consider previous goals, observations, and failures when deciding actions.
+- Reformulate the query to be self-contained.
 - Return ONLY valid JSON. No extra text, no markdown, no explanations.
 
 Output schema:
@@ -107,6 +109,7 @@ class OrchestratorModel:
         user_input: str,
         all_tools: list | None = None,
         memories_context: str | None = None,
+        state_context: dict | None = None,
     ) -> OrchestratorOutput:
         """Analyze user input and return structured output.
 
@@ -114,6 +117,8 @@ class OrchestratorModel:
             user_input: Raw user query.
             all_tools: Full tool list (overrides instance list).
             memories_context: Relevant memories for context.
+            state_context: Current internal agent state summary.
+
 
         Returns:
             OrchestratorOutput with tools, query, and optional plan.
@@ -125,8 +130,17 @@ class OrchestratorModel:
         system_prompt = ORCHESTRATOR_SYSTEM_PROMPT.format(tools=tool_descriptions)
 
         user_prompt = f"User query: {user_input}"
+
         if memories_context:
-            user_prompt += f"\n\nMemory context:\n{memories_context}"
+            user_prompt += (
+                f"\n\nMemory context:\n{memories_context}"
+            )
+
+        if state_context:
+            user_prompt += (
+                "\n\nCurrent agent state:\n"
+                f"{json.dumps(state_context, indent=2)}"
+            )
 
         raw = await self._call(system_prompt, user_prompt)
         if raw is None:

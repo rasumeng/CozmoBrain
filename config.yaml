@@ -1,6 +1,6 @@
 model: qwen3:8b
 max_tokens: 2048
-workspace: ./workspace
+workspace: D:/Projects/CozmoBrain
 
 orchestrator:
   model: openbmb/minicpm5:fp16
@@ -16,7 +16,7 @@ mcp_servers:
     args:
       - "-y"
       - "@modelcontextprotocol/server-filesystem"
-      - "./workspace"
+      - "D:/Projects/CozmoBrain"
   git:
     command: python
     args:
@@ -52,3 +52,5 @@ tray:
 
 max_history: 20
 tool_response_max_chars: 2000
+
+agent_state_path: "./agent_state.json"

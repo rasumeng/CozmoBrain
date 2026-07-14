@@ -10,11 +10,41 @@ from datetime import datetime, timezone
 import yaml
 
 
-WORKSPACE = Path("./workspace").resolve()
+WORKSPACE = Path("D:/Projects/CozmoBrain").resolve()
 KNOWLEDGE = Path("./knowledge").resolve()
 SEARXNG_URL = "http://localhost:8080"
 DOCKER_AVAILABLE = shutil.which("docker") is not None
+TOOL_METADATA = {
+    "execute_python": {
+        "category": "execution",
+        "description": "Run Python code in sandbox"
+    },
 
+    "fetch_url": {
+        "category": "research",
+        "description": "Fetch webpage contents"
+    },
+
+    "web_search": {
+        "category": "research",
+        "description": "Search the internet"
+    },
+
+    "write_file": {
+        "category": "filesystem",
+        "description": "Write files into workspace"
+    },
+
+    "read_knowledge": {
+        "category": "knowledge",
+        "description": "Read stored knowledge"
+    },
+
+    "write_knowledge": {
+        "category": "knowledge",
+        "description": "Store learned information"
+    }
+}
 
 def _docker_available() -> bool:
     """Check if Docker daemon is running."""

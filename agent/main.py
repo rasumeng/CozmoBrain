@@ -149,6 +149,7 @@ async def main():
             try:
                 # Run orchestrator: memory retrieval + optional planning
                 orc_result = await orchestrator.process(user_input, message_history)
+                console.print(f"[dim]Agent state: {orchestrator.state.status}[/]") # Remove later
 
                 # Combine plan context + memories into one extra_context string
                 extra_parts = []

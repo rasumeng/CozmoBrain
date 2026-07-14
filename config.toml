@@ -1,0 +1,72 @@
+# ============================================================================
+# CozmoBrain Configuration
+# ============================================================================
+
+[models]
+chat = "qwen3:8b"
+orchestrator = "openbmb/minicpm5:fp16"
+embedding = "all-MiniLM-L6-v2"
+
+[llm]
+max_tokens = 2048
+temperature = 0
+
+[paths]
+workspace = "./workspace"
+knowledge = "./knowledge"
+memory = "./memory_store"
+git_repo = "."
+
+[chat]
+max_history = 20
+
+[memory]
+auto_summarize = true
+max_auto_inject = 2
+embedding_dimension = 384
+
+[search]
+provider = "searxng"
+url = "http://localhost:8080"
+
+[orchestrator]
+ollama_url = "http://localhost:11434"
+
+[tools]
+response_max_chars = 2000
+
+[voice]
+enabled = true
+model = "tiny"
+hotkey = "v"
+
+[tray]
+enabled = true
+
+[calendar]
+ics_path = "./calendar/events.ics"
+
+[providers.weather]
+provider = "wttr.in"
+api_key = ""
+
+[providers.news]
+provider = "rss"
+api_key = ""
+
+[mcp_servers.filesystem]
+command = "npx"
+args = [
+    "-y",
+    "@modelcontextprotocol/server-filesystem",
+    "./workspace",
+]
+
+[mcp_servers.git]
+command = "python"
+args = [
+    "-m",
+    "mcp_server_git",
+    "--repository",
+    ".",
+]

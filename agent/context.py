@@ -56,3 +56,33 @@ def compact_messages(messages: list, config: dict) -> list:
     """Apply context management: sliding window trim."""
     max_messages = config.get("max_history", 20)
     return trim_history(messages, max_messages)
+
+def build_state_context(state_summary: dict) -> str:
+    """
+    Convert agent state into prompt context.
+    """
+
+    lines = [
+        "## Agent Internal State",
+        "",
+        f"Status: {state_summary.get('status')}",
+    ]
+
+    if state_summary.get("goal"):
+        lines.append(
+            f"Current Goal: {state_summary['goal']}"
+        )
+
+    if state_summary.get("recent_observations"):
+        lines.append("")
+        lines.append("Recent Observations:")
+        for obs in state_summary["recent_observations"]:
+            lines.append(f"- {obs}")
+
+    if state_summary.get("failures"):
+        lines.append("")
+        lines.append("Known Failures:")
+        for failure in state_summary["failures"]:
+            lines.append(f"- {failure}")
+
+    return "\n".join(lines)
