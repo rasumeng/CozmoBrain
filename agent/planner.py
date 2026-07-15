@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from .reflector import Reflector
+from .tool_registry import ToolRegistry, ToolSpec
 
 
 PLANNER_PROMPT = """You are a task planner. Given a user's goal and available tools, create a step-by-step plan.
@@ -20,6 +21,7 @@ Rules:
 - Keep plans minimal — one step per unique tool call needed
 - If the goal needs 1 tool call, return a single step
 - If a tool fails, the plan should continue with remaining steps
+- Consider tool risk levels. Prefer low-risk tools when possible.
 - Always return valid JSON only, no extra text
 
 Available tools: {tool_list}
@@ -129,11 +131,20 @@ class TaskQueue:
         return [s for s in self.steps.values() if s.status == StepStatus.FAILED]
 
 
+def _tool_name(t: Any) -> str:
+    if isinstance(t, ToolSpec):
+        return t.name
+    return t.__name__
+
+
 class PlanExecutor:
     """Executes plan steps with reflection-based error recovery."""
 
-    def __init__(self, tools: list, reflector: Reflector | None = None):
-        self.tools = {t.__name__: t for t in tools}
+    def __init__(self, tools: list | ToolRegistry, reflector: Reflector | None = None):
+        if isinstance(tools, ToolRegistry):
+            self.tools = {s.name: s for s in tools.all()}
+        else:
+            self.tools = {_tool_name(t): t for t in tools}
         self.reflector = reflector or Reflector()
 
     async def execute_step(
@@ -190,7 +201,7 @@ def _call_llm(
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
-    payload = json.dumps({
+    payload_dict = {
         "model": model,
         "messages": messages,
         "stream": False,
@@ -198,7 +209,10 @@ def _call_llm(
             "temperature": 0,
             "num_predict": 1024,
         },
-    }).encode("utf-8")
+    }
+    if structured:
+        payload_dict["format"] = "json"
+    payload = json.dumps(payload_dict).encode("utf-8")
 
     req = urllib.request.Request(
         f"{ollama_url}/api/chat",
@@ -220,25 +234,38 @@ class Planner:
 
     def __init__(
         self,
-        tools: list,
+        tools: list | ToolRegistry,
         model: str = "qwen3:8b",
         ollama_url: str = "http://localhost:11434",
         max_steps: int = 10,
+        tool_registry: ToolRegistry | None = None,
     ):
-        self.tools = tools
+        self._raw_tools = tools
+        self.tool_registry = tool_registry
         self.model = model
         self.ollama_url = ollama_url
         self.max_steps = max_steps
         self.executor = PlanExecutor(tools)
 
     def _get_tool_list(self) -> str:
-        return ", ".join(t.__name__ for t in self.tools)
+        if self.tool_registry:
+            return self.tool_registry.describe_all()
+        if isinstance(self._raw_tools, ToolRegistry):
+            return self._raw_tools.describe_all()
+        return "\n".join(f"- {_tool_name(t)}: {t.__doc__ or ''}" for t in self._raw_tools)
+
+    def _tool_names(self) -> set[str]:
+        if self.tool_registry:
+            return set(self.tool_registry.names())
+        if isinstance(self._raw_tools, ToolRegistry):
+            return set(self._raw_tools.names())
+        return {_tool_name(t) for t in self._raw_tools}
 
     async def create_plan(self, goal: str) -> Plan | None:
         """Generate a plan from a user goal using the LLM."""
         tool_list = self._get_tool_list()
         prompt = PLANNER_PROMPT.format(tool_list=tool_list)
-        user_message = f"Goal: {goal}\n\nAvailable tools: {tool_list}"
+        user_message = f"Goal: {goal}\n\nAvailable tools:\n{tool_list}"
 
         response = await asyncio.to_thread(
             _call_llm,
@@ -290,7 +317,7 @@ class Planner:
             return False
 
         step_ids = set()
-        tool_names = {t.__name__ for t in self.tools}
+        tool_names = self._tool_names()
 
         for i, step in enumerate(plan_data["steps"]):
             if not isinstance(step, dict):

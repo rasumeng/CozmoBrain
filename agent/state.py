@@ -144,6 +144,11 @@ class AgentState:
             )
         )
 
+    def record_execution(self, plan):
+        self.active_plan = {"goal": plan.goal, "steps": len(plan.steps)}
+        self.current_step = len([s for s in plan.steps if getattr(s, 'status', None) and s.status.value == "done"])
+        self.add_event("execution_complete", f"Plan executed: {self.current_step}/{len(plan.steps)} steps done")
+
     def record_tool(
         self,
         tool_name: str,

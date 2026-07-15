@@ -44,15 +44,36 @@ CozmoBrain/
 │   ├── tools.py
 │   ├── context.py
 │   ├── prompts.py
-│
-├── orchestrator_model.py
-├── reflector.py
-├── state.py
+│   ├── state.py
+│   ├── reflector.py
+│   ├── planner.py
+│   ├── orchestrator_model.py
+│   ├── orchestrator.py
+│   ├── runtime.py
+│   ├── events.py
+│   ├── mcp_host.py
+│   ├── main.py
+│   │
+│   ├── memory/
+│   │   ├── types.py
+│   │   ├── embed.py
+│   │   ├── store.py
+│   │   ├── retrieval.py
+│   │   └── pipeline.py
+│   │
+│   ├── tray/
+│   │   ├── tray.py
+│   │   ├── scheduler.py
+│   │   └── notify.py
+│   │
+│   ├── voice/
+│   ├── integrations/
+│   └── __init__.py
 │
 ├── knowledge/
 ├── memory_store/
 └── config.yaml
-Completed Work
+
 1. Persistent Agent State
 
 File:
@@ -102,6 +123,7 @@ add event hooks
 add persistence versioning
 add state migrations
 add checkpoint recovery
+
 2. Reflection System
 
 File:
@@ -146,11 +168,12 @@ Reflector
 
 Future improvements:
 
-connect reflector to AgentState
+connect reflector to AgentState (partial: used by PlanExecutor)
 store lessons learned
 create failure memory
 confidence scoring
 reflection prompts through LLM
+
 3. Context Management
 
 File:
@@ -167,6 +190,7 @@ token estimation
 history trimming
 tool response truncation
 message compaction
+state context builder (build_state_context)
 
 Current purpose:
 
@@ -185,6 +209,7 @@ working memory
 relevant memory retrieval
 conversation compression
 context prioritization
+
 4. Structured Orchestrator Model
 
 File:
@@ -197,7 +222,7 @@ Status:
 
 Current role:
 
-MiniCPM router/planner.
+MiniCPM router/planner with JSON-guaranteed output.
 
 Responsibilities:
 
@@ -224,10 +249,197 @@ Orchestrator Model
 
 Future improvements:
 
-connect to AgentState
-use memory context automatically
-support replanning
+connect to AgentState (done via AgentOrchestrator)
+use memory context automatically (done via AgentOrchestrator)
+support replanning (done via Planner)
 support multi-agent routing
+
+5. Agent Orchestrator
+
+File:
+
+orchestrator.py
+
+Status:
+
+✅ Implemented
+
+Purpose:
+
+Wires MiniCPM orchestrator + planner + state + memory into a unified query pipeline.
+
+Responsibilities:
+
+route queries through MiniCPM for tool selection + plan generation
+retrieve relevant memories before analysis
+execute multi-step plans via PlanExecutor
+feed plan results + memory context into LLM
+track agent state through lifecycle
+
+Flow:
+
+User Input
+    |
+    ▼
+Memory Retrieval
+    |
+    ▼
+MiniCPM Orchestrator (select tools, rewrite query, generate plan)
+    |
+    ├── Single step → pass directly to LLM
+    └── Multi-step  → PlanExecutor → results fed as context
+
+Known issues:
+
+StateStore initialized twice (fixed)
+Undefined variable reference in analyze call (fixed)
+Missing record_execution method (fixed)
+
+6. Planner Module
+
+File:
+
+planner.py
+
+Status:
+
+✅ Implemented
+
+Separate planning from orchestration.
+
+Architecture:
+
+Orchestrator
+      |
+      ▼
+Planner
+      |
+      ▼
+Execution Runtime
+
+Planner responsibilities:
+
+create plans via LLM (hybrid planner)
+break goals into steps with dependency tracking
+estimate complexity via tool list validation
+request replanning on failure
+execute plans through TaskQueue + PlanExecutor
+retry with reflection-based error recovery
+
+Includes:
+
+Plan, PlanStep, TaskQueue, PlanExecutor — full lifecycle
+TaskQueue: dependency resolution state machine
+PlanExecutor: retry loop with Reflector integration
+
+7. Memory Architecture
+
+File:
+
+agent/memory/ (package with 5 modules)
+
+Status:
+
+✅ Implemented (ahead of original plan)
+
+Three-layer memory (in types.py):
+
+Working Memory (via AgentState.scratchpad)
+Episodic Memory (conversation history with vector embeddings)
+Semantic Memory (extracted facts, learnings, knowledge)
+
+Components:
+
+MemoryEntry — typed dataclass (content, embedding, type, tags, importance)
+MemoryType — enum (EPISODIC, SEMANTIC, PROCEDURAL)
+MemoryEmbedder — sentence-transformers wrapper (384d, CPU)
+LanceMemoryStore — LanceDB vector store with FTS + vector search
+MemoryRetriever — hybrid search (vector + FTS) with recency/importance scoring
+MemoryPipeline — background pipeline: summarize → extract → embed → store
+
+Capabilities:
+
+vector similarity search
+full-text search fallback
+scoring: vector distance × importance × recency decay
+auto-inject top N memories into system prompt
+background conversation → memory pipeline
+auto-extract facts into knowledge base
+
+8. Event System
+
+File:
+
+events.py
+
+Status:
+
+✅ Implemented
+
+Purpose:
+
+Everything becomes observable.
+
+Example:
+
+EventBus.emit("tool_started", {"tool": "web_search"})
+
+Events:
+
+goal_started, goal_completed
+plan_created, plan_failed
+tool_started, tool_finished, tool_failed
+step_completed, step_failed
+reflection_completed
+memory_updated
+state_changed
+error, warning, info
+
+Benefits:
+
+TUI updates
+debugging
+logs
+autonomous monitoring
+
+9. Runtime Controller
+
+File:
+
+runtime.py
+
+Status:
+
+✅ Implemented
+
+Purpose:
+
+Own the cognition loop.
+
+Responsibilities:
+
+load state
+accept goal
+execute plan
+handle failures
+call reflector
+save state
+
+Interface:
+
+CognitiveRuntime.run(goal)
+
+Loop:
+
+LOAD STATE → PLAN → EXECUTE → REFLECT → UPDATE STATE → SAVE
+
+Features:
+
+EventBus integration for observability
+Fallback plan via OrchestratorModel if Planner fails
+Replan on failure (up to max_retries)
+Automatic state persistence
+
 Current Cognitive Loop
 
 Current:
@@ -235,16 +447,14 @@ Current:
 User
  |
  ▼
-Orchestrator
+CognitiveRuntime.run(goal)
  |
- ▼
-LLM
- |
- ▼
-Tools
- |
- ▼
-Response
+ ├── PLANNING (Planner + OrchestratorModel fallback)
+ ├── EXECUTING (PlanExecutor + Reflector)
+ ├── REFLECTING (Reflector on failures)
+ ├── UPDATE STATE (persist)
+ └── COMPLETE
+
 Target Hermes-Style Cognitive Loop
 
 Future:
@@ -291,13 +501,18 @@ Future:
            |
            ▼
 
-       Continue Loop
+      Continue Loop
+
 Next Implementation Phase
 Phase 1 — Runtime Controller
 
-Create:
+File:
 
 runtime.py
+
+Status:
+
+✅ Implemented
 
 Purpose:
 
@@ -312,9 +527,9 @@ handle failures
 call reflector
 save state
 
-Expected:
+Interface:
 
-Runtime.run(goal)
+CognitiveRuntime.run(goal)
 
 controls:
 
@@ -323,23 +538,22 @@ EXECUTE
 OBSERVE
 REFLECT
 UPDATE
+
 Phase 2 — Planner Module
 
-Create:
+File:
 
 planner.py
+
+Status:
+
+✅ Implemented
 
 Purpose:
 
 Separate planning from orchestration.
 
-Currently:
-
-orchestrator_model.py
-
-does too much.
-
-Move toward:
+Architecture:
 
 Orchestrator
       |
@@ -355,11 +569,16 @@ create plans
 break goals into steps
 estimate complexity
 request replanning
+
 Phase 3 — Event System
 
-Create:
+File:
 
 events.py
+
+Status:
+
+✅ Implemented
 
 Purpose:
 
@@ -367,22 +586,18 @@ Everything becomes observable.
 
 Example:
 
-AgentEvent(
-    type="tool_started",
-    data={
-        "tool":"web_search"
-    }
-)
+EventBus.emit("tool_started", {"tool": "web_search"})
 
 Events:
 
-goal_started
-plan_created
-tool_started
-tool_finished
+goal_started, goal_completed
+plan_created, plan_failed
+tool_started, tool_finished, tool_failed
+step_completed, step_failed
 reflection_completed
 memory_updated
 state_changed
+error, warning, info
 
 Benefits:
 
@@ -390,6 +605,7 @@ TUI updates
 debugging
 logs
 autonomous monitoring
+
 Phase 4 — Upgrade State System
 
 Current:
@@ -400,9 +616,9 @@ Upgrade:
 
 AgentState
 +
-EventBus
+EventBus (done in events.py)
 +
-Persistence
+Persistence (done via StateStore)
 +
 Transitions
 
@@ -426,38 +642,44 @@ Phase 5 — Memory Architecture
 
 Current:
 
-knowledge/
-memory_store/
+agent/memory/ (5 modules)
 
-Target:
+Status:
 
-Three-layer memory:
+✅ Implemented (ahead of original plan)
+
+Target achieved:
 
 Memory System
 
-├── Working Memory
-│       current task
-│
-├── Episodic Memory
-│       past experiences
-│
-└── Semantic Memory
-        learned knowledge
+├── Working Memory (AgentState.scratchpad)
+├── Episodic Memory (conversations in vector DB + knowledge files)
+└── Semantic Memory (extracted facts, learnings)
 
-Implement:
+Components:
 
-memory_manager.py
+types.py — MemoryEntry, MemoryType (EPISODIC, SEMANTIC, PROCEDURAL)
+embed.py — MemoryEmbedder (sentence-transformers, 384d)
+store.py — LanceMemoryStore (LanceDB, vector + FTS)
+retrieval.py — MemoryRetriever (hybrid search, recency/importance scoring)
+pipeline.py — MemoryPipeline (background summarize → extract → embed → store)
 
-Responsibilities:
+Future improvements:
 
-retrieve relevant memories
-summarize experiences
-store lessons
+memory consolidation / dedup
+memory decay / forgetting curves
+cross-session inference
+memory graph / associations
+
 Phase 6 — Autonomous Runtime
 
-Add:
+File:
 
-scheduler.py
+agent/tray/scheduler.py
+
+Status:
+
+✅ Implemented
 
 Purpose:
 
@@ -467,10 +689,10 @@ Examples:
 
 Allowed:
 
-memory cleanup
+memory cleanup (via MemoryPipeline background processing)
 indexing
 checking queued tasks
-maintenance
+reminder notifications
 
 Not allowed:
 
@@ -483,63 +705,84 @@ Autonomy should always be:
 bounded
 observable
 interruptible
+
 Phase 7 — Tool Intelligence
 
-Current:
+File:
 
-tools.py
+tool_registry.py
 
-Upgrade:
+Status:
 
-ToolRegistry
+✅ Implemented
 
-+
-Permissions
+What was built:
 
-+
-Tool Metadata
+ToolSpec — dataclass wrapping each tool with name, description, fn, risk_level (LOW/MEDIUM/HIGH/CRITICAL), permissions (read/write/execute/network/filesystem), category. Callable + __name__/__doc__/__signature__ for full backward compat.
 
-Each tool gains:
+ToolRegistry — collection with lookup by name, category, risk level, permissions. Richer tool descriptions for planner/orchestrator prompts (includes signatures, risk icons, permissions).
 
-Tool(
- name,
- description,
- risk_level,
- cost,
- required_permissions
-)
+RiskLevel — enum (LOW, MEDIUM, HIGH, CRITICAL) for tool risk classification
 
-Planner can reason:
+Permissions — string set (read, write, execute, network, filesystem, dangerous)
 
-"Should I use this tool?"
+Backward compat: all existing code paths still work with bare function lists
+
+Config key: tools.py exports get_native_specs() + get_native_registry()
 
 Phase 8 — Improved Reflection
 
+File:
+
+reflector.py
+
+Status:
+
+✅ Implemented
+
 Upgrade:
-
-Current:
-
-Rule based reflection
-
-Future:
 
 Rule Reflection
        +
-LLM Reflection
+LLM Reflection (configurable)
        +
-Memory
+Memory (LessonStore)
 
-Example:
+What was built:
 
-After failure:
+LessonStore — persists failure lessons with tool, error_pattern, root_cause, suggestion, context. match() scoring for retrieval. format_for_prompt() surfaces relevant lessons to LLM.
 
-Why failed?
+LLM reflection — when reflection.llm_enabled=true in config, calls LLM with error + past lessons for deep root cause analysis. Auto-stores new lessons. Falls back to rule-based on failure.
 
-What changed?
+Confidence scoring — LLM returns confidence 0-1, rules return hard 1.0
 
-Should future attempts avoid this?
+Config key:
 
-Store lesson?
+reflection:
+  llm_enabled: true
+  llm_model: qwen3:8b
+  ollama_url: http://localhost:11434
+
+Phase 9 — Multi-Agent Routing
+
+File:
+
+agent_router.py
+
+Status:
+
+✅ Implemented
+
+What was built:
+
+AgentProfile — dataclass (name, description, model, allowed_categories, system_prompt_override)
+
+AgentRouter — routes queries to agent profiles. LLM-based routing with rule-based fallback. Profiles registered: coder (execution/code tasks), researcher (research/search tasks), writer (file/knowledge tasks).
+
+Integration — OrchestratorModel injects agent_profile + description into system prompt. CognitiveRuntime routes before planning.
+
+Config key: agent profiles registered in main.py
+
 Final Target Architecture
 CozmoBrain Runtime
 
@@ -575,6 +818,7 @@ Tools MCP  Agents
      ▼
 
  Learning / Memory Update
+
 Long-Term Goals
 Intelligence
 
@@ -618,15 +862,22 @@ to:
 
 Current Priority Order
 ✅ AgentState
-✅ Reflector
-✅ Structured Orchestrator
-🔨 Runtime controller
-🔨 Planner extraction
-🔨 Event system
-🔨 Memory manager
-🔨 Autonomous scheduler
-🔨 Tool registry upgrade
-🔨 Multi-agent capabilities
+✅ Reflector (rule + LLM + LessonStore)
+✅ Structured Orchestrator (orchestrator_model.py + orchestrator.py)
+✅ Planner module (planner.py)
+✅ Event system (events.py + EventBus)
+✅ Runtime controller (runtime.py)
+✅ Memory system (agent/memory/ — 5 modules)
+✅ Scheduler (agent/tray/scheduler.py)
+✅ Tool registry upgrade (ToolRegistry + Permissions + Metadata)
+✅ Multi-agent capabilities (AgentRouter + AgentProfile)
+✅ LLM-powered reflection (Phase 8 upgrade)
+
+All phases complete. Remaining optional polish:
+- State transition validation guards
+- CLI entrypoint / packaging (pyproject.toml)
+- Add `reflection.llm_enabled: true` to config for LLM failure analysis
+
 End Goal
 
 CozmoBrain becomes a persistent autonomous cognitive framework:

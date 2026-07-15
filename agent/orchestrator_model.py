@@ -12,11 +12,17 @@ from typing import Any
 from pydantic import BaseModel, Field
 from dataclasses import dataclass
 
+from .tool_registry import ToolRegistry, ToolSpec
+from .agent_router import AgentRouter
+
 
 ORCHESTRATOR_SYSTEM_PROMPT = """You are CozmoBrain's orchestrator. Your job: analyze the user request and output structured JSON.
 
 Available tools:
 {tools}
+
+Agent profile: {agent_profile}
+Agent description: {agent_description}
 
 Rules:
 - Select the MINIMUM tools needed. Quality over quantity.
@@ -28,6 +34,7 @@ Rules:
 - Use memory context and agent state if provided.
 - Consider previous goals, observations, and failures when deciding actions.
 - Reformulate the query to be self-contained.
+- Consider tool risk levels. Prefer low-risk tools. Only use high/critical risk tools if the request explicitly requires it.
 - Return ONLY valid JSON. No extra text, no markdown, no explanations.
 
 Output schema:
@@ -51,22 +58,24 @@ class OrchestratorOutput(BaseModel):
     plan: list[PlanStep] | None = None
 
 
-def build_tool_descriptions(tools: list) -> str:
-    """Serialize tool functions into descriptions for the orchestrator prompt.
+def _descr(t: Any) -> str:
+    if isinstance(t, ToolSpec):
+        return t.short_desc()
+    name = t.__name__
+    sig = _format_signature(t)
+    doc = (t.__doc__ or "No description").strip().split("\n")[0]
+    return f"{name}{sig} — {doc}"
 
-    Each tool described as: name(args) — docstring
-    """
-    lines = []
-    for t in tools:
-        name = t.__name__
-        sig = _format_signature(t)
-        doc = (t.__doc__ or "No description").strip().split("\n")[0]
-        lines.append(f"- {name}{sig} — {doc}")
-    return "\n".join(lines)
+
+def build_tool_descriptions(tools: list | ToolRegistry) -> str:
+    if isinstance(tools, ToolRegistry):
+        return tools.describe_all()
+    return "\n".join(f"- {_descr(t)}" for t in tools)
 
 
 def _format_signature(tool) -> str:
-    """Extract function signature as (arg1: type, arg2: type = default)."""
+    if isinstance(tool, ToolSpec):
+        return tool.format_sig()
     try:
         sig = inspect.signature(tool)
         parts = []
@@ -99,10 +108,14 @@ class OrchestratorModel:
         model: str = "openbmb/minicpm5:fp16",
         ollama_url: str = "http://localhost:11434",
         all_tools: list | None = None,
+        tool_registry: ToolRegistry | None = None,
+        agent_router: AgentRouter | None = None,
     ):
         self.model = model
         self.ollama_url = ollama_url
         self.all_tools = all_tools or []
+        self.tool_registry = tool_registry
+        self.agent_router = agent_router
 
     async def analyze(
         self,
@@ -110,6 +123,7 @@ class OrchestratorModel:
         all_tools: list | None = None,
         memories_context: str | None = None,
         state_context: dict | None = None,
+        agent_profile: str = "default",
     ) -> OrchestratorOutput:
         """Analyze user input and return structured output.
 
@@ -118,6 +132,7 @@ class OrchestratorModel:
             all_tools: Full tool list (overrides instance list).
             memories_context: Relevant memories for context.
             state_context: Current internal agent state summary.
+            agent_profile: Agent profile name for routing context.
 
 
         Returns:
@@ -125,9 +140,19 @@ class OrchestratorModel:
             On failure, returns fallback with all tools + original query.
         """
         tools = all_tools or self.all_tools
-        tool_descriptions = build_tool_descriptions(tools)
+        tool_descriptions = build_tool_descriptions(self.tool_registry or tools)
 
-        system_prompt = ORCHESTRATOR_SYSTEM_PROMPT.format(tools=tool_descriptions)
+        profile_name = agent_profile
+        profile_desc = ""
+        if self.agent_router:
+            profile = self.agent_router.get(profile_name)
+            profile_desc = profile.description
+
+        system_prompt = ORCHESTRATOR_SYSTEM_PROMPT.format(
+            tools=tool_descriptions,
+            agent_profile=profile_name,
+            agent_description=profile_desc,
+        )
 
         user_prompt = f"User query: {user_input}"
 
@@ -212,8 +237,12 @@ class OrchestratorModel:
 
     def _fallback(self, original_query: str) -> OrchestratorOutput:
         """Safe fallback: all tools + original query."""
+        if self.tool_registry:
+            tools = self.tool_registry.names()
+        else:
+            tools = [t.__name__ for t in (self.all_tools or [])]
         return OrchestratorOutput(
-            tools=[t.__name__ for t in (self.all_tools or [])],
+            tools=tools,
             query=original_query,
             plan=None,
         )

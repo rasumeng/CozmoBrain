@@ -7,6 +7,8 @@ from .planner import Plan, PlanStep, PlanExecutor
 from .reflector import Reflector
 from .orchestrator_model import OrchestratorModel, OrchestratorOutput
 from .state import AgentState, StateStore, AgentStatus
+from .tool_registry import ToolRegistry
+from .agent_router import AgentRouter
 
 
 @dataclass
@@ -28,27 +30,35 @@ class AgentOrchestrator:
         config: dict,
         all_tools: list,
         memory_retriever: Any | None = None,
+        tool_registry: ToolRegistry | None = None,
+        agent_router: AgentRouter | None = None,
     ):
         self.config = config
         self.all_tools = all_tools
         self.memory_retriever = memory_retriever
-        self.state_store = StateStore(
-            config.get(
-                "agent_state_path",
-                "./agent_state.json"
-            )
-        )
+        self.tool_registry = tool_registry
+        self.agent_router = agent_router
+        state_path = config.get("agent_state_path", "./agent_state.json")
+        self.state_store = StateStore(state_path)
 
         self.state = self.state_store.load()
-        self.reflector = Reflector()
-        self.state_store = StateStore()
-        self.state = self.state_store.load()
+        reflect_config = config.get("reflection", {})
+        lesson_store = __import__("agent.reflector", fromlist=["LessonStore"]).LessonStore()
+        llm_config = {}
+        if reflect_config.get("llm_enabled", False):
+            llm_config = {
+                "model": reflect_config.get("llm_model", "qwen3:8b"),
+                "ollama_url": reflect_config.get("ollama_url", "http://localhost:11434"),
+            }
+        self.reflector = Reflector(lesson_store=lesson_store, llm_config=llm_config)
 
         orc_config = config.get("orchestrator", {})
         self.orch_model = OrchestratorModel(
             model=orc_config.get("model", "openbmb/minicpm5:fp16"),
             ollama_url=orc_config.get("ollama_url", "http://localhost:11434"),
             all_tools=all_tools,
+            tool_registry=tool_registry,
+            agent_router=agent_router,
         )
 
     def _resolve_tools(self, selected_names: list[str]) -> list:
@@ -129,12 +139,19 @@ class AgentOrchestrator:
             except Exception:
                 pass
 
+        # Step 1.5: Route to agent profile
+        profile = "default"
+        if self.agent_router:
+            routing = await self.agent_router.route(user_input)
+            profile = routing.agent
+            result.status_messages.append(f"[router] → {profile}")
+
         # Step 2: MiniCPM orchestrator
         orc_output = await self.orch_model.analyze(
             user_input,
             memories_context=result.memories_context,
             state_context=self.state.summary(),
-            planned=orc_output.plan is not None,
+            agent_profile=profile,
         )
 
         self.state.add_event(

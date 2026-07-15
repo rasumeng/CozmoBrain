@@ -4,6 +4,7 @@ workspace: D:/Projects/CozmoBrain
 
 orchestrator:
   model: openbmb/minicpm5:fp16
+  planner_model: qwen3:8b
   ollama_url: http://localhost:11434
   temperature: 0
 knowledge: ./knowledge

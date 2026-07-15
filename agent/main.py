@@ -11,12 +11,14 @@ from rich.console import Console
 
 from . import tools as tools_module
 from .llm import create_agent
-from .tools import execute_python, fetch_url, write_file, read_knowledge, write_knowledge, web_search
+from .tools import execute_python, fetch_url, write_file, read_knowledge, write_knowledge, web_search, get_native_specs
 from .mcp_host import MCPHost
 from .context import compact_messages, count_message_tokens, truncate_tool_responses
 from .orchestrator import AgentOrchestrator
 from .memory import MemoryEmbedder, LanceMemoryStore, MemoryRetriever, MemoryPipeline
 from .integrations import get_integration_tools
+from .tool_registry import ToolRegistry, ToolSpec
+from .agent_router import AgentRouter, AgentProfile
 
 
 console = Console()
@@ -35,8 +37,8 @@ async def main():
     # Configure native tool settings from config
     tools_module.SEARXNG_URL = config.get("searxng_url", tools_module.SEARXNG_URL)
 
-    # Native tools (sync)
-    native_tools = [execute_python, fetch_url, write_file, read_knowledge, write_knowledge, web_search]
+    # Build ToolRegistry
+    registry = ToolRegistry(get_native_specs())
 
     # Connect MCP servers and get async tool wrappers
     mcp = MCPHost("config.yaml")
@@ -47,11 +49,52 @@ async def main():
     except Exception:
         pass
 
+    # Register MCP tools as ToolSpecs (infer metadata from callables)
+    for t in mcp_tools:
+        registry.register(ToolSpec(
+            name=t.__name__,
+            description=getattr(t, "__doc__", "MCP tool") or "MCP tool",
+            fn=t,
+            risk_level=RiskLevel.MEDIUM,
+            permissions={"network"},
+            category="mcp",
+        ))
+
     # Integration tools (system, weather, news, reminders, calendar)
     integration_tools = get_integration_tools(config)
+    for t in integration_tools:
+        registry.register(ToolSpec(
+            name=t.__name__,
+            description=getattr(t, "__doc__", "Integration tool") or "Integration tool",
+            fn=t,
+            risk_level=RiskLevel.LOW,
+            permissions={"read"},
+            category="integration",
+        ))
 
-    # All tools: native + integrations + MCP
-    all_tools = native_tools + integration_tools + mcp_tools
+    # All tools: as callable list (backward compat)
+    all_tools = registry.to_callables()
+
+    # Agent router with profiles
+    router = AgentRouter(llm_config=config.get("router", {}))
+    router.register(AgentProfile(
+        name="coder",
+        description="Specialist for code execution, debugging, scripting tasks",
+        model=config.get("model", "qwen3:8b"),
+        allowed_categories=["execution", "filesystem"],
+    ))
+    router.register(AgentProfile(
+        name="researcher",
+        description="Specialist for web search, URL fetching, information gathering",
+        model=config.get("model", "qwen3:8b"),
+        allowed_categories=["research"],
+    ))
+    router.register(AgentProfile(
+        name="writer",
+        description="Specialist for writing files, knowledge base entries, note-taking",
+        model=config.get("model", "qwen3:8b"),
+        allowed_categories=["filesystem", "knowledge"],
+    ))
 
     # Initialize memory system
     mem_config = config.get("memory", {})
@@ -71,8 +114,13 @@ async def main():
         auto_knowledge=mem_config.get("auto_summarize", True),
     )
 
-    # Initialize orchestrator with memory
-    orchestrator = AgentOrchestrator(config, all_tools, memory_retriever=mem_retriever)
+    # Initialize orchestrator with memory + registry + router
+    orchestrator = AgentOrchestrator(
+        config, all_tools,
+        memory_retriever=mem_retriever,
+        tool_registry=registry,
+        agent_router=router,
+    )
 
     # Initialize voice (STT + TTS) if enabled
     voice_listener = None

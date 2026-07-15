@@ -9,42 +9,13 @@ from datetime import datetime, timezone
 
 import yaml
 
+from .tool_registry import ToolSpec, RiskLevel
+
 
 WORKSPACE = Path("D:/Projects/CozmoBrain").resolve()
 KNOWLEDGE = Path("./knowledge").resolve()
 SEARXNG_URL = "http://localhost:8080"
 DOCKER_AVAILABLE = shutil.which("docker") is not None
-TOOL_METADATA = {
-    "execute_python": {
-        "category": "execution",
-        "description": "Run Python code in sandbox"
-    },
-
-    "fetch_url": {
-        "category": "research",
-        "description": "Fetch webpage contents"
-    },
-
-    "web_search": {
-        "category": "research",
-        "description": "Search the internet"
-    },
-
-    "write_file": {
-        "category": "filesystem",
-        "description": "Write files into workspace"
-    },
-
-    "read_knowledge": {
-        "category": "knowledge",
-        "description": "Read stored knowledge"
-    },
-
-    "write_knowledge": {
-        "category": "knowledge",
-        "description": "Store learned information"
-    }
-}
 
 def _docker_available() -> bool:
     """Check if Docker daemon is running."""
@@ -277,3 +248,61 @@ def write_knowledge(path: str, content: str, type: str = "Reference", title: str
         return f"[ok] Written to knowledge/{path}"
     except Exception as e:
         return f"[error] {e}"
+
+
+def get_native_specs() -> list[ToolSpec]:
+    return [
+        ToolSpec(
+            name="execute_python",
+            description="Execute Python code in sandboxed environment and return stdout/stderr",
+            fn=execute_python,
+            risk_level=RiskLevel.HIGH,
+            permissions={"execute"},
+            category="execution",
+        ),
+        ToolSpec(
+            name="fetch_url",
+            description="Fetch a URL and return clean text content",
+            fn=fetch_url,
+            risk_level=RiskLevel.MEDIUM,
+            permissions={"network"},
+            category="research",
+        ),
+        ToolSpec(
+            name="web_search",
+            description="Search the internet using SearXNG and return summarized results",
+            fn=web_search,
+            risk_level=RiskLevel.LOW,
+            permissions={"network"},
+            category="research",
+        ),
+        ToolSpec(
+            name="write_file",
+            description="Write content to a file inside the workspace directory",
+            fn=write_file,
+            risk_level=RiskLevel.MEDIUM,
+            permissions={"write", "filesystem"},
+            category="filesystem",
+        ),
+        ToolSpec(
+            name="read_knowledge",
+            description="Read a file from the knowledge base",
+            fn=read_knowledge,
+            risk_level=RiskLevel.LOW,
+            permissions={"read"},
+            category="knowledge",
+        ),
+        ToolSpec(
+            name="write_knowledge",
+            description="Write a file to the knowledge base with OKF frontmatter",
+            fn=write_knowledge,
+            risk_level=RiskLevel.MEDIUM,
+            permissions={"write", "filesystem"},
+            category="knowledge",
+        ),
+    ]
+
+
+def get_native_registry():
+    from .tool_registry import ToolRegistry
+    return ToolRegistry(get_native_specs())
